@@ -1,10 +1,12 @@
-# 使用 Python 3.11 官方镜像作为基础镜像
-FROM python:3.11-slim
+# 使用 Python 3.11 稳定版镜像 (Debian 12 bookworm)
+FROM python:3.11-slim-bookworm
 
 # 设置工作目录
 WORKDIR /app
 
-# 安装系统依赖（包括 Oracle Instant Client 所需的 libaio1）
+# 安装系统依赖
+# 注意：在 Debian 12 中，libaio1 仍然可用
+# 如果在其他版本中需要 libaio1t64，可以通过 || true 来忽略错误
 RUN apt-get update && apt-get install -y \
     build-essential \
     libaio1 \
