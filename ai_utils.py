@@ -1,11 +1,19 @@
 import openai
 import json
 from datetime import date, datetime
+from decimal import Decimal
 
 class DateEncoder(json.JSONEncoder):
+    """自定义 JSON 编码器，支持 date, datetime, Decimal 等特殊类型"""
     def default(self, obj):
         if isinstance(obj, (date, datetime)):
             return obj.isoformat()
+        elif isinstance(obj, Decimal):
+            # 将 Decimal 转换为 float 或 int（如果是整数）
+            if obj % 1 == 0:
+                return int(obj)
+            else:
+                return float(obj)
         return super().default(obj)
 
 def analyze_table_with_ai(api_key, base_url, model, table_metadata):
