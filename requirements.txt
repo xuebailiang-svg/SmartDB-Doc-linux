@@ -1,0 +1,10 @@
+streamlit
+SQLAlchemy
+python-docx
+oracledb
+openai
+pandas
+
+# YashanDB 支持依赖（需要从 YashanDB 技术支持获取）
+# python-yasdb
+# yashandb_sqlalchemy
