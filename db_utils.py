@@ -36,21 +36,22 @@ def get_engine(db_type, host, port, user, password, database):
     elif db_type == "PostgreSQL":
         url = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{database}"
     elif db_type == "Oracle":
-        # 核心修复：通过 creator 手动控制连接过程，强制字符集协商
+        # 核心修复：移除 encoding 参数，使用 Thin Mode 兼容的连接方式
         def create_oracle_connection():
-            # 强制设置环境变量
+            # 设置环境变量 (对 Thick Mode 有效)
             os.environ["NLS_LANG"] = "AMERICAN_AMERICA.AL32UTF8"
-            # 构造连接参数，显式指定编码
+            
+            # 在 Thin Mode 下，oracledb 默认使用 UTF-8。
+            # 如果数据库不是 UTF-8，驱动会自动处理转换。
+            # 显式移除 encoding 参数以避免 "unexpected keyword argument" 错误。
             conn = oracledb.connect(
                 user=user,
                 password=password,
-                dsn=f"{host}:{port}/{database}",
-                encoding="UTF-8",
-                nencoding="UTF-8"
+                dsn=f"{host}:{port}/{database}"
             )
             return conn
         
-        # 使用 creator 模式绕过 SQLAlchemy 默认的连接行为
+        # 使用 creator 模式
         engine = create_engine("oracle+oracledb://", creator=create_oracle_connection, pool_pre_ping=True)
         return engine
     elif db_type == "SQL Server":
@@ -67,7 +68,13 @@ def get_oracle_metadata_native(engine, scope_type, target_schema, target_tables,
     使用原生 SQL 提取 Oracle 元数据，彻底解决乱码问题
     """
     tables_metadata = []
-    user_upper = target_schema.upper() if target_schema else engine.url.username.upper() if engine.url.username else user.upper()
+    # 确保 user_upper 有值
+    try:
+        user_upper = target_schema.upper() if target_schema else engine.url.username.upper()
+    except:
+        # 如果从 engine.url 获取失败，尝试从连接中获取
+        with engine.connect() as conn:
+            user_upper = conn.execute(text("SELECT USER FROM DUAL")).scalar().upper()
     
     with engine.connect() as conn:
         # 1. 获取表列表和注释
@@ -179,7 +186,10 @@ def get_schema_metadata(engine, scope_type="全库", target_schema=None, target_
 
     inspector = inspect(engine)
     if not target_schema:
-        target_schema = engine.url.username.upper() if engine.url.username else None
+        try:
+            target_schema = engine.url.username.upper() if engine.url.username else None
+        except:
+            target_schema = None
     
     table_names = inspector.get_table_names(schema=target_schema)
     if scope_type == "指定表" and target_tables:
