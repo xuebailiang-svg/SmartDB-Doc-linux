@@ -17,9 +17,9 @@ if 'er_diagram' not in st.session_state:
 if 'api_key' not in st.session_state:
     st.session_state.api_key = ""
 if 'base_url' not in st.session_state:
-    st.session_state.base_url = "https://api.openai.com/v1"
+    st.session_state.base_url = "http://localhost:11434/v1"
 if 'model' not in st.session_state:
-    st.session_state.model = "gpt-4o"
+    st.session_state.model = "qwen2.5:14b"
 
 st.title("🚀 SmartDB-Doc: 全能数据库文档自动化生成工具")
 st.markdown("---")
@@ -65,9 +65,16 @@ with st.sidebar:
     # 模型提供商选择
     model_provider = st.selectbox(
         "模型提供商", 
-        ["OpenAI", "DeepSeek", "自定义"],
-        index=0 if st.session_state.base_url == "https://api.openai.com/v1" else 1 if st.session_state.base_url == "https://api.deepseek.com/v1" else 2
+        ["Ollama (本地)", "OpenAI", "DeepSeek", "自定义"],
+        index=0 if "11434" in st.session_state.base_url else 1 if "openai" in st.session_state.base_url else 2 if "deepseek" in st.session_state.base_url else 3
     )
+    
+    # 根据模型提供商选择模型
+    if model_provider == "Ollama (本地)":
+        model_options = ["qwen2.5:14b", "qwen2.5:7b", "llama3"]
+        default_model = "qwen2.5:14b"
+        default_base_url = "http://localhost:11434/v1"
+    elif model_provider == "OpenAI":
     
     # 根据模型提供商选择模型
     if model_provider == "OpenAI":
@@ -124,6 +131,8 @@ if connect_btn:
             st.info("提示：请确保已安装 ODBC Driver 17/18 for SQL Server。")
         elif db_type == "YashanDB":
             st.info("提示：请确保已安装 YashanDB Python 驱动 (yasdb)。如果使用 SQLAlchemy 模式，还需安装 yashandb_sqlalchemy 方言库。")
+        
+        st.warning("💡 容器连接提示：如果数据库在宿主机或其他容器，请勿使用 'localhost'。请尝试使用宿主机 IP 或 Docker 容器名。")
 
 # 主界面展示
 if st.session_state.metadata:
