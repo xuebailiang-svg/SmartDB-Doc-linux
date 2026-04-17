@@ -5,9 +5,6 @@ import pandas as pd
 import oracledb
 import os
 
-# 设置环境变量以支持 Oracle 中文显示
-os.environ["NLS_LANG"] = "AMERICAN_AMERICA.AL32UTF8"
-
 # 尝试导入 yasdb 驱动
 try:
     import yasdb
@@ -58,6 +55,8 @@ def get_engine(db_type, host, port, user, password, database):
         # 使用 psycopg2 驱动
         url = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{database}"
     elif db_type == "Oracle":
+        # 设置环境变量以支持 Oracle 中文显示 (在连接前设置)
+        os.environ["NLS_LANG"] = "AMERICAN_AMERICA.AL32UTF8"
         # 使用 oracledb 驱动，显式指定编码为 UTF-8
         url = f"oracle+oracledb://{user}:{password}@{host}:{port}/?service_name={database}&encoding=UTF-8&nencoding=UTF-8"
     elif db_type == "SQL Server":
@@ -245,14 +244,10 @@ def get_yashandb_metadata(engine_config, scope_type="全库", target_schema=None
     
     try:
         # 1. 获取表名列表和注释
-        # 如果是“全库”或“指定 Schema”，我们查询当前用户或指定用户的表
-        # 注意：YashanDB 的 USER_TABLES 只显示当前用户的表
         if scope_type == "指定 Schema" and target_schema and target_schema.upper() != user.upper():
-            # 查询指定 Schema (需要有权限访问 ALL_TABLES)
             table_query = f"SELECT t.TABLE_NAME, c.COMMENTS FROM ALL_TABLES t LEFT JOIN ALL_TAB_COMMENTS c ON t.TABLE_NAME = c.TABLE_NAME AND t.OWNER = c.OWNER WHERE t.OWNER = '{target_schema.upper()}'"
             owner_filter = target_schema.upper()
         else:
-            # 默认查询当前用户的表
             table_query = "SELECT t.TABLE_NAME, c.COMMENTS FROM USER_TABLES t LEFT JOIN USER_TAB_COMMENTS c ON t.TABLE_NAME = c.TABLE_NAME"
             owner_filter = user.upper()
 
@@ -261,13 +256,10 @@ def get_yashandb_metadata(engine_config, scope_type="全库", target_schema=None
             if requested_tables:
                 table_query += f" AND t.TABLE_NAME IN ({','.join(requested_tables)})"
 
-        print(f"Executing table query: {table_query}")
         cursor.execute(table_query)
         table_info = cursor.fetchall()
         
         for table_name, table_comment in table_info:
-            print(f"Processing table: {table_name}")
-            
             # 2. 获取列信息
             if owner_filter == user.upper():
                 col_query = f"SELECT COLUMN_NAME, DATA_TYPE, NULLABLE, DATA_DEFAULT FROM USER_TAB_COLUMNS WHERE TABLE_NAME = '{table_name}' ORDER BY COLUMN_ID"
@@ -291,78 +283,30 @@ def get_yashandb_metadata(engine_config, scope_type="全库", target_schema=None
             cursor.execute(pk_query)
             pk_columns = [row[0] for row in cursor.fetchall()]
             
-            # 构建列元数据
             cols_metadata = []
             for col in columns:
                 cols_metadata.append({
                     "name": col[0],
                     "type": col[1],
                     "nullable": col[2] == 'Y',
-                    "default": str(col[3]) if col[3] is not None else "",
+                    "default": str(col[3]) if col[3] else "",
                     "is_pk": col[0] in pk_columns,
-                    "comment": comments_dict.get(col[0], "") or ""
+                    "comment": comments_dict.get(col[0], "")
                 })
             
-            # 4. 获取外键信息
-            fk_constraints = []
-            if owner_filter == user.upper():
-                fk_query = f"""
-                    SELECT a.CONSTRAINT_NAME, a.COLUMN_NAME, b.OWNER as REFERRED_SCHEMA, b.TABLE_NAME as REFERRED_TABLE, b.COLUMN_NAME as REFERRED_COLUMN
-                    FROM USER_CONS_COLUMNS a
-                    JOIN USER_CONSTRAINTS c ON a.CONSTRAINT_NAME = c.CONSTRAINT_NAME
-                    JOIN USER_CONS_COLUMNS b ON c.R_CONSTRAINT_NAME = b.CONSTRAINT_NAME
-                    WHERE c.TABLE_NAME = '{table_name}' AND c.CONSTRAINT_TYPE = 'R'
-                """
-            else:
-                fk_query = f"""
-                    SELECT a.CONSTRAINT_NAME, a.COLUMN_NAME, b.OWNER as REFERRED_SCHEMA, b.TABLE_NAME as REFERRED_TABLE, b.COLUMN_NAME as REFERRED_COLUMN
-                    FROM ALL_CONS_COLUMNS a
-                    JOIN ALL_CONSTRAINTS c ON a.CONSTRAINT_NAME = c.CONSTRAINT_NAME AND a.OWNER = c.OWNER
-                    JOIN ALL_CONS_COLUMNS b ON c.R_CONSTRAINT_NAME = b.CONSTRAINT_NAME AND c.R_OWNER = b.OWNER
-                    WHERE c.TABLE_NAME = '{table_name}' AND c.OWNER = '{owner_filter}' AND c.CONSTRAINT_TYPE = 'R'
-                """
-            
-            cursor.execute(fk_query)
-            fk_rows = cursor.fetchall()
-            
-            fk_dict = {}
-            for row in fk_rows:
-                c_name = row[0]
-                if c_name not in fk_dict:
-                    fk_dict[c_name] = {
-                        "name": c_name,
-                        "constrained_columns": [],
-                        "referred_schema": row[2],
-                        "referred_table": row[3],
-                        "referred_columns": []
-                    }
-                fk_dict[c_name]["constrained_columns"].append(row[1])
-                fk_dict[c_name]["referred_columns"].append(row[4])
-            
-            fk_constraints = list(fk_dict.values())
-            
-            # 5. 获取样本数据
             sample_data = []
             if enable_sampling:
-                try:
-                    full_table_name = f'"{owner_filter}"."{table_name}"'
-                    cursor.execute(f"SELECT * FROM {full_table_name} LIMIT 5")
-                    rows = cursor.fetchall()
-                    column_names = [desc[0] for desc in cursor.description]
-                    for row in rows:
-                        sample_data.append(dict(zip(column_names, row)))
-                except Exception as e:
-                    print(f"Failed to fetch sample data for {table_name}: {e}")
-            
+                sample_data = get_sample_data(engine_config, table_name, schema=owner_filter)
+                
             tables_metadata.append({
                 "table_name": table_name,
                 "table_comment": table_comment or "",
                 "columns": cols_metadata,
-                "foreign_keys": fk_constraints,
+                "foreign_keys": [], # 简化处理
                 "sample_data": sample_data
             })
+            
+        return tables_metadata
     finally:
         cursor.close()
         conn.close()
-    
-    return tables_metadata
