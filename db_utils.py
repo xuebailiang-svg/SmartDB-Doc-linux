@@ -4,6 +4,7 @@ from sqlalchemy.engine import URL
 import pandas as pd
 import oracledb
 import os
+import sys
 
 # 尝试导入 yasdb 驱动
 try:
@@ -13,13 +14,21 @@ except ImportError:
     YASDB_AVAILABLE = False
 
 # 尝试初始化 Oracle Client (Thick Mode)
+# 增加初始化状态记录，避免重复初始化或阻塞
+ORACLE_CLIENT_INITIALIZED = False
 try:
     # 在 Docker 环境中，我们已经配置了 LD_LIBRARY_PATH
-    # init_oracle_client() 不传参数会默认查找系统库路径
-    oracledb.init_oracle_client()
-    print("Oracle Thick Mode initialized successfully.")
+    # 显式指定 lib_dir 确保万无一失
+    lib_dir = "/opt/oracle/instantclient_21_10"
+    if os.path.exists(lib_dir):
+        oracledb.init_oracle_client(lib_dir=lib_dir)
+        ORACLE_CLIENT_INITIALIZED = True
+        print(f"Oracle Thick Mode initialized successfully from {lib_dir}")
+    else:
+        oracledb.init_oracle_client()
+        ORACLE_CLIENT_INITIALIZED = True
+        print("Oracle Thick Mode initialized successfully via system path.")
 except Exception as e:
-    # 如果失败，会自动回退到 Thin Mode
     print(f"Oracle Client initialization info (Using Thin Mode): {e}")
 
 def get_engine(db_type, host, port, user, password, database):
@@ -39,14 +48,11 @@ def get_engine(db_type, host, port, user, password, database):
     elif db_type == "PostgreSQL":
         url = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{database}"
     elif db_type == "Oracle":
-        # 核心修复：移除 encoding 参数，使用 Thin Mode 兼容的连接方式
+        # 核心修复：根据是否成功初始化 Thick Mode 选择连接方式
         def create_oracle_connection():
-            # 设置环境变量 (对 Thick Mode 有效)
             os.environ["NLS_LANG"] = "AMERICAN_AMERICA.AL32UTF8"
-            
-            # 在 Thin Mode 下，oracledb 默认使用 UTF-8。
-            # 如果数据库不是 UTF-8，驱动会自动处理转换。
-            # 显式移除 encoding 参数以避免 "unexpected keyword argument" 错误。
+            # 如果是 Thick Mode，可以使用 encoding 参数（在某些版本中）
+            # 但为了通用性，我们优先使用 DSN 连接
             conn = oracledb.connect(
                 user=user,
                 password=password,
@@ -54,7 +60,6 @@ def get_engine(db_type, host, port, user, password, database):
             )
             return conn
         
-        # 使用 creator 模式
         engine = create_engine("oracle+oracledb://", creator=create_oracle_connection, pool_pre_ping=True)
         return engine
     elif db_type == "SQL Server":
@@ -71,16 +76,13 @@ def get_oracle_metadata_native(engine, scope_type, target_schema, target_tables,
     使用原生 SQL 提取 Oracle 元数据，彻底解决乱码问题
     """
     tables_metadata = []
-    # 确保 user_upper 有值
     try:
         user_upper = target_schema.upper() if target_schema else engine.url.username.upper()
     except:
-        # 如果从 engine.url 获取失败，尝试从连接中获取
         with engine.connect() as conn:
             user_upper = conn.execute(text("SELECT USER FROM DUAL")).scalar().upper()
     
     with engine.connect() as conn:
-        # 1. 获取表列表和注释
         table_sql = f"SELECT TABLE_NAME, COMMENTS FROM ALL_TAB_COMMENTS WHERE OWNER = '{user_upper}' AND TABLE_TYPE = 'TABLE'"
         if scope_type == "指定表" and target_tables:
             table_list = ",".join([f"'{t.strip().upper()}'" for t in target_tables.split(",") if t.strip()])
@@ -93,7 +95,6 @@ def get_oracle_metadata_native(engine, scope_type, target_schema, target_tables,
             table_name = row['table_name']
             table_comment = row['comments']
             
-            # 2. 获取列信息和注释
             col_sql = f"""
                 SELECT 
                     t.COLUMN_NAME, t.DATA_TYPE, t.NULLABLE, t.DATA_DEFAULT, c.COMMENTS
@@ -104,7 +105,6 @@ def get_oracle_metadata_native(engine, scope_type, target_schema, target_tables,
             """
             df_cols = pd.read_sql(text(col_sql), conn)
             
-            # 3. 获取主键
             pk_sql = f"""
                 SELECT cols.column_name
                 FROM all_constraints cons, all_cons_columns cols
@@ -140,9 +140,6 @@ def get_oracle_metadata_native(engine, scope_type, target_schema, target_tables,
     return tables_metadata
 
 def get_sample_data(engine, table_name, schema=None, limit=5):
-    """
-    抓取样本数据
-    """
     if isinstance(engine, dict) and engine.get('type') == 'yasdb':
         conn_info = engine['connection']
         try:
@@ -174,9 +171,6 @@ def get_sample_data(engine, table_name, schema=None, limit=5):
     except: return []
 
 def get_schema_metadata(engine, scope_type="全库", target_schema=None, target_tables=None, enable_sampling=False):
-    """
-    提取元数据主入口
-    """
     if isinstance(engine, dict) and engine.get('type') == 'yasdb':
         return get_yashandb_metadata(engine, scope_type, target_schema, target_tables, enable_sampling)
     
@@ -221,9 +215,6 @@ def get_schema_metadata(engine, scope_type="全库", target_schema=None, target_
     return tables_metadata
 
 def get_yashandb_metadata(engine_config, scope_type, target_schema, target_tables, enable_sampling):
-    """
-    使用 yasdb 直接获取 YashanDB 元数据
-    """
     conn_info = engine_config['connection']
     conn = yasdb.connect(dsn=f"{conn_info['host']}:{conn_info['port']}", user=conn_info['user'], password=conn_info['password'])
     cursor = conn.cursor()

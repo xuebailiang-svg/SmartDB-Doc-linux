@@ -5,16 +5,17 @@ FROM python:3.11-slim-bookworm
 WORKDIR /app
 
 # 安装系统依赖
+# 在 Debian 12 中，libaio1 可能被 libaio1t64 替代，这里做兼容处理
 RUN apt-get update && apt-get install -y \
     build-essential \
     libaio1 \
     curl \
     unzip \
     git \
+    && apt-get install -y libaio1t64 || true \
     && rm -rf /var/lib/apt/lists/*
 
 # 安装 Oracle Instant Client (开启 Thick Mode 以解决乱码)
-# 使用 Oracle 官方提供的 Basic Lite 版本
 RUN mkdir -p /opt/oracle && \
     cd /opt/oracle && \
     curl -L -o instantclient-basiclite.zip https://download.oracle.com/otn_software/linux/instantclient/211000/instantclient-basiclite-linux.x64-21.10.0.0.0dbru.zip && \
