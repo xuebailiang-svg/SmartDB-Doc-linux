@@ -15,12 +15,12 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # 安装 Oracle Instant Client (开启 Thick Mode 以解决乱码)
-# 增加重试逻辑 (--retry 5) 和连接超时设置 (--connect-timeout 30)
-RUN mkdir -p /opt/oracle && \
-    cd /opt/oracle && \
-    curl --retry 5 --retry-delay 5 --connect-timeout 30 -L -o instantclient-basiclite.zip https://download.oracle.com/otn_software/linux/instantclient/211000/instantclient-basiclite-linux.x64-21.10.0.0.0dbru.zip && \
-    unzip instantclient-basiclite.zip && \
-    rm -f instantclient-basiclite.zip && \
+# 改为从本地复制压缩包，避免网络下载失败
+# 请确保 instantclient-basiclite-linux.x64-21.10.0.0.0dbru.zip 存在于项目根目录
+COPY instantclient-basiclite-linux.x64-21.10.0.0.0dbru.zip /opt/oracle/
+RUN cd /opt/oracle && \
+    unzip instantclient-basiclite-linux.x64-21.10.0.0.0dbru.zip && \
+    rm -f instantclient-basiclite-linux.x64-21.10.0.0.0dbru.zip && \
     echo /opt/oracle/instantclient_21_10 > /etc/ld.so.conf.d/oracle-instantclient.conf && \
     ldconfig
 
