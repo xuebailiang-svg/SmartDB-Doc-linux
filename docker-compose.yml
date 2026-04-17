@@ -10,4 +10,6 @@ services:
       - .:/app
     environment:
       - TZ=Asia/Shanghai
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: always

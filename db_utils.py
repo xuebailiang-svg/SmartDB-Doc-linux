@@ -36,8 +36,23 @@ def get_engine(db_type, host, port, user, password, database):
     elif db_type == "PostgreSQL":
         url = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{database}"
     elif db_type == "Oracle":
-        os.environ["NLS_LANG"] = "AMERICAN_AMERICA.AL32UTF8"
-        url = f"oracle+oracledb://{user}:{password}@{host}:{port}/?service_name={database}"
+        # 核心修复：通过 creator 手动控制连接过程，强制字符集协商
+        def create_oracle_connection():
+            # 强制设置环境变量
+            os.environ["NLS_LANG"] = "AMERICAN_AMERICA.AL32UTF8"
+            # 构造连接参数，显式指定编码
+            conn = oracledb.connect(
+                user=user,
+                password=password,
+                dsn=f"{host}:{port}/{database}",
+                encoding="UTF-8",
+                nencoding="UTF-8"
+            )
+            return conn
+        
+        # 使用 creator 模式绕过 SQLAlchemy 默认的连接行为
+        engine = create_engine("oracle+oracledb://", creator=create_oracle_connection, pool_pre_ping=True)
+        return engine
     elif db_type == "SQL Server":
         connection_string = f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={host},{port};DATABASE={database};UID={user};PWD={password}"
         url = URL.create("mssql+pyodbc", query={"odbc_connect": connection_string})
@@ -52,7 +67,7 @@ def get_oracle_metadata_native(engine, scope_type, target_schema, target_tables,
     使用原生 SQL 提取 Oracle 元数据，彻底解决乱码问题
     """
     tables_metadata = []
-    user_upper = target_schema.upper() if target_schema else engine.url.username.upper()
+    user_upper = target_schema.upper() if target_schema else engine.url.username.upper() if engine.url.username else user.upper()
     
     with engine.connect() as conn:
         # 1. 获取表列表和注释
@@ -164,7 +179,7 @@ def get_schema_metadata(engine, scope_type="全库", target_schema=None, target_
 
     inspector = inspect(engine)
     if not target_schema:
-        target_schema = engine.url.username.upper() if db_type in ['oracle', 'yashandb'] else None
+        target_schema = engine.url.username.upper() if engine.url.username else None
     
     table_names = inspector.get_table_names(schema=target_schema)
     if scope_type == "指定表" and target_tables:

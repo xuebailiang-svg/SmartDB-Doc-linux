@@ -17,7 +17,7 @@ if 'er_diagram' not in st.session_state:
 if 'api_key' not in st.session_state:
     st.session_state.api_key = ""
 if 'base_url' not in st.session_state:
-    st.session_state.base_url = "http://localhost:11434/v1"
+    st.session_state.base_url = "http://host.docker.internal:11434/v1"
 if 'model' not in st.session_state:
     st.session_state.model = "qwen2.5:14b"
 
@@ -73,7 +73,7 @@ with st.sidebar:
     if model_provider == "Ollama (本地)":
         model_options = ["qwen2.5:14b", "qwen2.5:7b", "llama3"]
         default_model = "qwen2.5:14b"
-        default_base_url = "http://localhost:11434/v1"
+        default_base_url = "http://host.docker.internal:11434/v1"
     elif model_provider == "OpenAI":
         model_options = ["gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"]
         default_model = "gpt-4o"
