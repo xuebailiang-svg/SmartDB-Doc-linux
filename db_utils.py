@@ -16,13 +16,10 @@ except ImportError:
 # 尝试初始化 Oracle Client (Thick Mode)
 ORACLE_CLIENT_INITIALIZED = False
 try:
-    # 优化：不再硬编码路径，优先依赖系统库路径 (ldconfig 已配置)
-    # 如果环境中有 Oracle 库，init_oracle_client() 会自动识别
     oracledb.init_oracle_client()
     ORACLE_CLIENT_INITIALIZED = True
     print("Oracle Thick Mode initialized successfully via system library path.")
 except Exception as e:
-    # 如果自动识别失败，尝试从常见的挂载路径寻找
     try:
         import glob
         potential_dirs = glob.glob("/opt/oracle/instantclient_*")
@@ -36,7 +33,7 @@ except Exception as e:
 
 def get_engine(db_type, host, port, user, password, database):
     """
-    创建多数据库引擎，适配 Oracle, MySQL, PostgreSQL, SQL Server, YashanDB
+    创建多数据库引擎
     """
     if db_type == "YashanDB":
         if YASDB_AVAILABLE:
@@ -52,6 +49,7 @@ def get_engine(db_type, host, port, user, password, database):
         url = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{database}"
     elif db_type == "Oracle":
         def create_oracle_connection():
+            # 强制设置 NLS_LANG
             os.environ["NLS_LANG"] = "AMERICAN_AMERICA.AL32UTF8"
             conn = oracledb.connect(
                 user=user,
@@ -71,9 +69,9 @@ def get_engine(db_type, host, port, user, password, database):
     engine = create_engine(url, pool_pre_ping=True)
     return engine
 
-def get_oracle_metadata_native(engine, scope_type, target_schema, target_tables, enable_sampling):
+def get_oracle_metadata_native(engine, scope_type, target_schema, target_tables, enable_sampling, log_callback=None):
     """
-    使用原生 SQL 提取 Oracle 元数据，彻底解决乱码问题
+    使用原生 SQL 提取 Oracle 元数据，彻底解决乱码问题，并支持进度日志
     """
     tables_metadata = []
     try:
@@ -82,7 +80,10 @@ def get_oracle_metadata_native(engine, scope_type, target_schema, target_tables,
         with engine.connect() as conn:
             user_upper = conn.execute(text("SELECT USER FROM DUAL")).scalar().upper()
     
+    if log_callback: log_callback(f"正在获取用户 [{user_upper}] 的表列表...")
+
     with engine.connect() as conn:
+        # 1. 获取表列表和注释
         table_sql = f"SELECT TABLE_NAME, COMMENTS FROM ALL_TAB_COMMENTS WHERE OWNER = '{user_upper}' AND TABLE_TYPE = 'TABLE'"
         if scope_type == "指定表" and target_tables:
             table_list = ",".join([f"'{t.strip().upper()}'" for t in target_tables.split(",") if t.strip()])
@@ -90,11 +91,17 @@ def get_oracle_metadata_native(engine, scope_type, target_schema, target_tables,
                 table_sql += f" AND TABLE_NAME IN ({table_list})"
         
         df_tables = pd.read_sql(text(table_sql), conn)
+        total_tables = len(df_tables)
         
-        for _, row in df_tables.iterrows():
+        if log_callback: log_callback(f"共发现 {total_tables} 张表，开始逐一提取元数据...")
+
+        for i, row in df_tables.iterrows():
             table_name = row['table_name']
             table_comment = row['comments']
             
+            if log_callback: log_callback(f"[{i+1}/{total_tables}] 正在提取表: {table_name} ({table_comment or '无备注'})")
+
+            # 2. 获取列信息和注释
             col_sql = f"""
                 SELECT 
                     t.COLUMN_NAME, t.DATA_TYPE, t.NULLABLE, t.DATA_DEFAULT, c.COMMENTS
@@ -105,6 +112,7 @@ def get_oracle_metadata_native(engine, scope_type, target_schema, target_tables,
             """
             df_cols = pd.read_sql(text(col_sql), conn)
             
+            # 3. 获取主键
             pk_sql = f"""
                 SELECT cols.column_name
                 FROM all_constraints cons, all_cons_columns cols
@@ -170,16 +178,16 @@ def get_sample_data(engine, table_name, schema=None, limit=5):
             return df.to_dict(orient='records')
     except: return []
 
-def get_schema_metadata(engine, scope_type="全库", target_schema=None, target_tables=None, enable_sampling=False):
+def get_schema_metadata(engine, scope_type="全库", target_schema=None, target_tables=None, enable_sampling=False, log_callback=None):
     if isinstance(engine, dict) and engine.get('type') == 'yasdb':
-        return get_yashandb_metadata(engine, scope_type, target_schema, target_tables, enable_sampling)
+        return get_yashandb_metadata(engine, scope_type, target_schema, target_tables, enable_sampling, log_callback)
     
     db_type = engine.dialect.name
     if db_type == 'oracle':
         try:
-            return get_oracle_metadata_native(engine, scope_type, target_schema, target_tables, enable_sampling)
+            return get_oracle_metadata_native(engine, scope_type, target_schema, target_tables, enable_sampling, log_callback)
         except Exception as e:
-            print(f"Native Oracle metadata extraction failed: {e}")
+            if log_callback: log_callback(f"原生提取失败，尝试回退到通用模式: {e}")
 
     inspector = inspect(engine)
     if not target_schema:
@@ -194,7 +202,9 @@ def get_schema_metadata(engine, scope_type="全库", target_schema=None, target_
         table_names = [t for t in requested if t in table_names]
     
     tables_metadata = []
-    for table_name in table_names:
+    total = len(table_names)
+    for i, table_name in enumerate(table_names):
+        if log_callback: log_callback(f"[{i+1}/{total}] 正在提取表: {table_name}")
         try:
             table_comment = inspector.get_table_comment(table_name, schema=target_schema).get('text')
         except: table_comment = ""
@@ -214,7 +224,7 @@ def get_schema_metadata(engine, scope_type="全库", target_schema=None, target_
         })
     return tables_metadata
 
-def get_yashandb_metadata(engine_config, scope_type, target_schema, target_tables, enable_sampling):
+def get_yashandb_metadata(engine_config, scope_type, target_schema, target_tables, enable_sampling, log_callback=None):
     conn_info = engine_config['connection']
     conn = yasdb.connect(dsn=f"{conn_info['host']}:{conn_info['port']}", user=conn_info['user'], password=conn_info['password'])
     cursor = conn.cursor()
@@ -233,7 +243,10 @@ def get_yashandb_metadata(engine_config, scope_type, target_schema, target_table
             if requested: table_query += f" AND t.TABLE_NAME IN ({requested})"
 
         cursor.execute(table_query)
-        for table_name, table_comment in cursor.fetchall():
+        rows = cursor.fetchall()
+        total = len(rows)
+        for i, (table_name, table_comment) in enumerate(rows):
+            if log_callback: log_callback(f"[{i+1}/{total}] 正在提取 YashanDB 表: {table_name}")
             col_query = f"SELECT COLUMN_NAME, DATA_TYPE, NULLABLE, DATA_DEFAULT FROM {'ALL' if owner_filter != user else 'USER'}_TAB_COLUMNS WHERE TABLE_NAME = '{table_name}'"
             if owner_filter != user: col_query += f" AND OWNER = '{owner_filter}'"
             cursor.execute(col_query)
