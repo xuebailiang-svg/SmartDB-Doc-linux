@@ -14,23 +14,25 @@ except ImportError:
     YASDB_AVAILABLE = False
 
 # 尝试初始化 Oracle Client (Thick Mode)
-# 增加初始化状态记录，避免重复初始化或阻塞
 ORACLE_CLIENT_INITIALIZED = False
 try:
-    # 在 Docker 环境中，我们已经配置了 LD_LIBRARY_PATH
-    # 显式指定 lib_dir 确保万无一失
-    # 适配 23.26 版本路径
-    lib_dir = "/opt/oracle/instantclient_23_26"
-    if os.path.exists(lib_dir):
-        oracledb.init_oracle_client(lib_dir=lib_dir)
-        ORACLE_CLIENT_INITIALIZED = True
-        print(f"Oracle Thick Mode initialized successfully from {lib_dir}")
-    else:
-        oracledb.init_oracle_client()
-        ORACLE_CLIENT_INITIALIZED = True
-        print("Oracle Thick Mode initialized successfully via system path.")
+    # 优化：不再硬编码路径，优先依赖系统库路径 (ldconfig 已配置)
+    # 如果环境中有 Oracle 库，init_oracle_client() 会自动识别
+    oracledb.init_oracle_client()
+    ORACLE_CLIENT_INITIALIZED = True
+    print("Oracle Thick Mode initialized successfully via system library path.")
 except Exception as e:
-    print(f"Oracle Client initialization info (Using Thin Mode): {e}")
+    # 如果自动识别失败，尝试从常见的挂载路径寻找
+    try:
+        import glob
+        potential_dirs = glob.glob("/opt/oracle/instantclient_*")
+        if potential_dirs:
+            lib_dir = potential_dirs[0]
+            oracledb.init_oracle_client(lib_dir=lib_dir)
+            ORACLE_CLIENT_INITIALIZED = True
+            print(f"Oracle Thick Mode initialized successfully from detected path: {lib_dir}")
+    except Exception as e2:
+        print(f"Oracle Client initialization info (Using Thin Mode): {e}")
 
 def get_engine(db_type, host, port, user, password, database):
     """
@@ -49,11 +51,8 @@ def get_engine(db_type, host, port, user, password, database):
     elif db_type == "PostgreSQL":
         url = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{database}"
     elif db_type == "Oracle":
-        # 核心修复：根据是否成功初始化 Thick Mode 选择连接方式
         def create_oracle_connection():
             os.environ["NLS_LANG"] = "AMERICAN_AMERICA.AL32UTF8"
-            # 如果是 Thick Mode，可以使用 encoding 参数（在某些版本中）
-            # 但为了通用性，我们优先使用 DSN 连接
             conn = oracledb.connect(
                 user=user,
                 password=password,
