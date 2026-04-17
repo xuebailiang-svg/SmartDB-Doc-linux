@@ -19,7 +19,8 @@ ORACLE_CLIENT_INITIALIZED = False
 try:
     # 在 Docker 环境中，我们已经配置了 LD_LIBRARY_PATH
     # 显式指定 lib_dir 确保万无一失
-    lib_dir = "/opt/oracle/instantclient_21_10"
+    # 适配 23.26 版本路径
+    lib_dir = "/opt/oracle/instantclient_23_26"
     if os.path.exists(lib_dir):
         oracledb.init_oracle_client(lib_dir=lib_dir)
         ORACLE_CLIENT_INITIALIZED = True

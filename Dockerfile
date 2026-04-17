@@ -15,17 +15,17 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # 安装 Oracle Instant Client (开启 Thick Mode 以解决乱码)
-# 改为从本地复制压缩包，避免网络下载失败
-# 请确保 instantclient-basiclite-linux.x64-21.10.0.0.0dbru.zip 存在于项目根目录
-COPY instantclient-basiclite-linux.x64-21.10.0.0.0dbru.zip /opt/oracle/
+# 适配用户下载的 23.26 版本
+COPY instantclient-basic-linux.x64-23.26.1.0.0.zip /opt/oracle/
 RUN cd /opt/oracle && \
-    unzip instantclient-basiclite-linux.x64-21.10.0.0.0dbru.zip && \
-    rm -f instantclient-basiclite-linux.x64-21.10.0.0.0dbru.zip && \
-    echo /opt/oracle/instantclient_21_10 > /etc/ld.so.conf.d/oracle-instantclient.conf && \
+    unzip instantclient-basic-linux.x64-23.26.1.0.0.zip && \
+    rm -f instantclient-basic-linux.x64-23.26.1.0.0.zip && \
+    # 23.x 版本的解压目录通常是 instantclient_23_26
+    echo /opt/oracle/instantclient_23_26 > /etc/ld.so.conf.d/oracle-instantclient.conf && \
     ldconfig
 
 # 设置 Oracle 相关的环境变量
-ENV LD_LIBRARY_PATH=/opt/oracle/instantclient_21_10:$LD_LIBRARY_PATH
+ENV LD_LIBRARY_PATH=/opt/oracle/instantclient_23_26:$LD_LIBRARY_PATH
 ENV NLS_LANG=AMERICAN_AMERICA.AL32UTF8
 
 # 复制依赖文件并安装 Python 包
