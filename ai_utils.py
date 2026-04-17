@@ -63,9 +63,20 @@ def analyze_table_with_ai(api_key, base_url, model, table_metadata):
         result = json.loads(response.choices[0].message.content)
         return result
     except Exception as e:
+        error_msg = str(e)
+        # 针对常见错误进行友好提示
+        if "Connection refused" in error_msg or "Failed to connect" in error_msg:
+            friendly_error = f"无法连接到 AI 服务 (Ollama 可能未启动或网络不通): {error_msg}"
+        elif "401" in error_msg or "Incorrect API key" in error_msg:
+            friendly_error = f"API Key 错误或无效: {error_msg}"
+        elif "404" in error_msg or "model_not_found" in error_msg:
+            friendly_error = f"模型不存在 (请检查模型名称是否正确): {error_msg}"
+        else:
+            friendly_error = f"AI 解析异常: {error_msg}"
+            
         return {
             "business_name": table_metadata['table_name'],
-            "business_description": "AI 解析失败: " + str(e),
+            "business_description": friendly_error,
             "columns_explanation": {col['name']: col.get('comment', '') for col in table_metadata['columns']}
         }
 

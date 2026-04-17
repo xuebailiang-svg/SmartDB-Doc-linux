@@ -5,6 +5,9 @@ import pandas as pd
 import oracledb
 import os
 
+# 设置环境变量以支持 Oracle 中文显示
+os.environ["NLS_LANG"] = "AMERICAN_AMERICA.AL32UTF8"
+
 # 尝试导入 yasdb 驱动
 try:
     import yasdb
@@ -55,8 +58,8 @@ def get_engine(db_type, host, port, user, password, database):
         # 使用 psycopg2 驱动
         url = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{database}"
     elif db_type == "Oracle":
-        # 使用 oracledb 驱动
-        url = f"oracle+oracledb://{user}:{password}@{host}:{port}/?service_name={database}"
+        # 使用 oracledb 驱动，显式指定编码为 UTF-8
+        url = f"oracle+oracledb://{user}:{password}@{host}:{port}/?service_name={database}&encoding=UTF-8&nencoding=UTF-8"
     elif db_type == "SQL Server":
         # 使用 pyodbc 驱动，需安装 ODBC Driver 17/18
         connection_string = f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={host},{port};DATABASE={database};UID={user};PWD={password}"
