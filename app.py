@@ -75,9 +75,6 @@ with st.sidebar:
         default_model = "qwen2.5:14b"
         default_base_url = "http://localhost:11434/v1"
     elif model_provider == "OpenAI":
-    
-    # 根据模型提供商选择模型
-    if model_provider == "OpenAI":
         model_options = ["gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"]
         default_model = "gpt-4o"
         default_base_url = "https://api.openai.com/v1"
