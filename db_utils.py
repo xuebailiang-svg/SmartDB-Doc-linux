@@ -14,9 +14,12 @@ except ImportError:
 
 # 尝试初始化 Oracle Client (Thick Mode)
 try:
+    # 在 Docker 环境中，我们已经配置了 LD_LIBRARY_PATH
+    # init_oracle_client() 不传参数会默认查找系统库路径
     oracledb.init_oracle_client()
     print("Oracle Thick Mode initialized successfully.")
 except Exception as e:
+    # 如果失败，会自动回退到 Thin Mode
     print(f"Oracle Client initialization info (Using Thin Mode): {e}")
 
 def get_engine(db_type, host, port, user, password, database):

@@ -5,8 +5,6 @@ FROM python:3.11-slim-bookworm
 WORKDIR /app
 
 # 安装系统依赖
-# 注意：在 Debian 12 中，libaio1 仍然可用
-# 如果在其他版本中需要 libaio1t64，可以通过 || true 来忽略错误
 RUN apt-get update && apt-get install -y \
     build-essential \
     libaio1 \
@@ -14,6 +12,20 @@ RUN apt-get update && apt-get install -y \
     unzip \
     git \
     && rm -rf /var/lib/apt/lists/*
+
+# 安装 Oracle Instant Client (开启 Thick Mode 以解决乱码)
+# 使用 Oracle 官方提供的 Basic Lite 版本
+RUN mkdir -p /opt/oracle && \
+    cd /opt/oracle && \
+    curl -L -o instantclient-basiclite.zip https://download.oracle.com/otn_software/linux/instantclient/211000/instantclient-basiclite-linux.x64-21.10.0.0.0dbru.zip && \
+    unzip instantclient-basiclite.zip && \
+    rm -f instantclient-basiclite.zip && \
+    echo /opt/oracle/instantclient_21_10 > /etc/ld.so.conf.d/oracle-instantclient.conf && \
+    ldconfig
+
+# 设置 Oracle 相关的环境变量
+ENV LD_LIBRARY_PATH=/opt/oracle/instantclient_21_10:$LD_LIBRARY_PATH
+ENV NLS_LANG=AMERICAN_AMERICA.AL32UTF8
 
 # 复制依赖文件并安装 Python 包
 COPY requirements.txt .
