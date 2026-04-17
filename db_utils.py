@@ -1,5 +1,5 @@
 import sqlalchemy
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, inspect, text, event
 from sqlalchemy.engine import URL
 import pandas as pd
 import oracledb
@@ -55,10 +55,10 @@ def get_engine(db_type, host, port, user, password, database):
         # 使用 psycopg2 驱动
         url = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{database}"
     elif db_type == "Oracle":
-        # 设置环境变量以支持 Oracle 中文显示 (在连接前设置)
+        # 设置环境变量以支持 Oracle 中文显示
         os.environ["NLS_LANG"] = "AMERICAN_AMERICA.AL32UTF8"
-        # 使用 oracledb 驱动，显式指定编码为 UTF-8
-        url = f"oracle+oracledb://{user}:{password}@{host}:{port}/?service_name={database}&encoding=UTF-8&nencoding=UTF-8"
+        # 使用 oracledb 驱动。注意：Thin Mode 不支持 encoding 参数，默认即为 UTF-8
+        url = f"oracle+oracledb://{user}:{password}@{host}:{port}/?service_name={database}"
     elif db_type == "SQL Server":
         # 使用 pyodbc 驱动，需安装 ODBC Driver 17/18
         connection_string = f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={host},{port};DATABASE={database};UID={user};PWD={password}"
@@ -70,6 +70,22 @@ def get_engine(db_type, host, port, user, password, database):
         url,
         pool_pre_ping=True
     )
+
+    # 针对 Oracle 的特殊处理：确保字符集正确处理
+    if db_type == "Oracle":
+        @event.listens_for(engine, "connect")
+        def set_oracle_charset(dbapi_connection, connection_record):
+            # 在连接建立时，可以进行一些会话级别的设置
+            cursor = dbapi_connection.cursor()
+            try:
+                # 强制会话使用 UTF8 相关的日期和货币格式，有助于稳定字符处理
+                cursor.execute("ALTER SESSION SET NLS_TERRITORY = 'AMERICA'")
+                cursor.execute("ALTER SESSION SET NLS_LANGUAGE = 'AMERICAN'")
+            except:
+                pass
+            finally:
+                cursor.close()
+
     return engine
 
 def get_sample_data(engine, table_name, schema=None, limit=5):
@@ -84,8 +100,6 @@ def get_sample_data(engine, table_name, schema=None, limit=5):
         user = conn_info['user']
         password = conn_info['password']
         
-        # YashanDB 中通常直接使用表名即可访问当前用户的表
-        # 如果指定了 schema，则使用 schema.table_name
         full_name = f'"{schema}"."{table_name}"' if schema else f'"{table_name}"'
         
         try:
@@ -96,19 +110,12 @@ def get_sample_data(engine, table_name, schema=None, limit=5):
                 password=password
             )
             cursor = conn.cursor()
-            
-            # YashanDB 支持 LIMIT 语法
             cursor.execute(f"SELECT * FROM {full_name} LIMIT {limit}")
             rows = cursor.fetchall()
-            
-            # 获取列名
             column_names = [desc[0] for desc in cursor.description]
-            
-            # 构建样本数据
             sample_data = []
             for row in rows:
                 sample_data.append(dict(zip(column_names, row)))
-            
             cursor.close()
             conn.close()
             return sample_data
@@ -119,7 +126,6 @@ def get_sample_data(engine, table_name, schema=None, limit=5):
     # 其他数据库使用 SQLAlchemy
     db_type = engine.dialect.name
     
-    # 处理表名转义
     if db_type == 'mysql':
         full_table_name = f'`{table_name}`'
     elif db_type == 'mssql':
@@ -129,7 +135,6 @@ def get_sample_data(engine, table_name, schema=None, limit=5):
     else:
         full_table_name = f'"{schema}"."{table_name}"' if schema else f'"{table_name}"'
     
-    # 根据数据库类型构造采样 SQL
     if db_type == 'oracle':
         query = f"SELECT * FROM (SELECT * FROM {full_table_name}) WHERE ROWNUM <= {limit}"
     elif db_type == 'mssql':
@@ -149,15 +154,12 @@ def get_schema_metadata(engine, scope_type="全库", target_schema=None, target_
     """
     提取数据库元数据，支持范围筛选和样本数据采样
     """
-    # 处理 YashanDB 特殊情况 (直接连接模式)
     if isinstance(engine, dict) and engine.get('type') == 'yasdb':
         return get_yashandb_metadata(engine, scope_type, target_schema, target_tables, enable_sampling)
     
-    # 其他数据库使用 SQLAlchemy inspector
     inspector = inspect(engine)
     db_type = engine.dialect.name
     
-    # 处理默认 Schema
     if not target_schema:
         if db_type == 'oracle':
             target_schema = engine.url.username.upper()
@@ -168,7 +170,6 @@ def get_schema_metadata(engine, scope_type="全库", target_schema=None, target_
         elif db_type == 'yashandb':
             target_schema = engine.url.username.upper()
     
-    # 获取表名列表
     if scope_type == "全库" or scope_type == "指定 Schema":
         table_names = inspector.get_table_names(schema=target_schema)
     elif scope_type == "指定表":
@@ -221,8 +222,7 @@ def get_schema_metadata(engine, scope_type="全库", target_schema=None, target_
 
 def get_yashandb_metadata(engine_config, scope_type="全库", target_schema=None, target_tables=None, enable_sampling=False):
     """
-    使用 yasdb 直接获取 YashanDB 元数据，适配 23.4 版本
-    使用 Oracle 兼容的系统视图 (USER_TABLES, USER_TAB_COLUMNS 等)
+    使用 yasdb 直接获取 YashanDB 元数据
     """
     conn_info = engine_config['connection']
     host = conn_info['host']
@@ -231,19 +231,11 @@ def get_yashandb_metadata(engine_config, scope_type="全库", target_schema=None
     password = conn_info['password']
     
     dsn = f"{host}:{port}"
-    print(f"Connecting to YashanDB with dsn={dsn}, user={user}")
-    
-    conn = yasdb.connect(
-        dsn=dsn,
-        user=user,
-        password=password
-    )
-    
+    conn = yasdb.connect(dsn=dsn, user=user, password=password)
     cursor = conn.cursor()
     tables_metadata = []
     
     try:
-        # 1. 获取表名列表和注释
         if scope_type == "指定 Schema" and target_schema and target_schema.upper() != user.upper():
             table_query = f"SELECT t.TABLE_NAME, c.COMMENTS FROM ALL_TABLES t LEFT JOIN ALL_TAB_COMMENTS c ON t.TABLE_NAME = c.TABLE_NAME AND t.OWNER = c.OWNER WHERE t.OWNER = '{target_schema.upper()}'"
             owner_filter = target_schema.upper()
@@ -260,7 +252,6 @@ def get_yashandb_metadata(engine_config, scope_type="全库", target_schema=None
         table_info = cursor.fetchall()
         
         for table_name, table_comment in table_info:
-            # 2. 获取列信息
             if owner_filter == user.upper():
                 col_query = f"SELECT COLUMN_NAME, DATA_TYPE, NULLABLE, DATA_DEFAULT FROM USER_TAB_COLUMNS WHERE TABLE_NAME = '{table_name}' ORDER BY COLUMN_ID"
                 comm_query = f"SELECT COLUMN_NAME, COMMENTS FROM USER_COL_COMMENTS WHERE TABLE_NAME = '{table_name}'"
@@ -270,11 +261,9 @@ def get_yashandb_metadata(engine_config, scope_type="全库", target_schema=None
 
             cursor.execute(col_query)
             columns = cursor.fetchall()
-            
             cursor.execute(comm_query)
             comments_dict = {row[0]: row[1] for row in cursor.fetchall()}
             
-            # 3. 获取主键信息
             if owner_filter == user.upper():
                 pk_query = f"SELECT COLUMN_NAME FROM USER_CONS_COLUMNS WHERE CONSTRAINT_NAME IN (SELECT CONSTRAINT_NAME FROM USER_CONSTRAINTS WHERE TABLE_NAME = '{table_name}' AND CONSTRAINT_TYPE = 'P')"
             else:
@@ -302,7 +291,7 @@ def get_yashandb_metadata(engine_config, scope_type="全库", target_schema=None
                 "table_name": table_name,
                 "table_comment": table_comment or "",
                 "columns": cols_metadata,
-                "foreign_keys": [], # 简化处理
+                "foreign_keys": [],
                 "sample_data": sample_data
             })
             
